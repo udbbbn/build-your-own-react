@@ -1,8 +1,10 @@
 {
   "jsc": {
+    "baseUrl": "./",
     "parser": {
       "syntax": "typescript",
-      "tsx": true
+      "tsx": true,
+      "loose": false
     },
     "transform": {
       "react": {
@@ -20,5 +22,14 @@
         }
       }
     }
+  },
+  "module": {
+    "type": "es6",
+
+    // These are defaults.
+    "strict": false,
+    "strictMode": true,
+    "lazy": false,
+    "noInterop": false
   }
 }

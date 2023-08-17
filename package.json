@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "build-your-own-react",
   "main": "index.js",
+  "type": "module",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "dev": "npx swc ./src -d dist -w"
+    "dev": "npx swc ./src -d dist -w & npx parcel ./public/index.html"
   },
   "repository": {
     "type": "git",
