@@ -18,7 +18,12 @@ type DidactElement = {
 }
 const TextElementType = "NODE_ELEMENT"
 
-let nextUnitOfWork: any = null
+let nextUnitOfWork: Fiber | null = null
+/**
+ * work in progress root.
+ * remain reference of root node.
+ */
+let wipRoot: Fiber | null = null
 
 const Didact = {
   createElement,
@@ -82,12 +87,31 @@ function createDom(fiber: Fiber): HTMLElement | Text {
  * @param container HTMLElement
  */
 function render(element: DidactElement, container: HTMLElement) {
-  nextUnitOfWork = {
+  wipRoot = {
     dom: container,
     props: {
       children: [element],
     },
-  }
+  } as Fiber
+  nextUnitOfWork = wipRoot
+}
+
+function commitRoot() {
+  commitWork(wipRoot!)
+  wipRoot = null
+}
+
+/**
+ * Equally, the sequence of recursive is child, sibling and finally is sibling of parent.
+ * @param fiber
+ * @returns
+ */
+function commitWork(fiber: Fiber) {
+  if (!fiber) return
+  const parentDom = fiber.parent.dom
+  parentDom?.appendChild(fiber.dom!)
+  commitWork(fiber.child!)
+  commitWork(fiber.sibling!)
 }
 
 /**
@@ -100,17 +124,22 @@ function workLoop(deadline: IdleDeadline) {
     nextUnitOfWork = performUnitOfWork(nextUnitOfWork)
     shouldYield = deadline.timeRemaining() < 1
   }
+
+  /**
+   * Once the link table loop success, recursively append to Dom.
+   */
+  if (!nextUnitOfWork && wipRoot) {
+    commitRoot()
+  }
+
   requestIdleCallback(workLoop)
 }
 
 requestIdleCallback(workLoop)
 
-function performUnitOfWork(fiber: Fiber) {
+function performUnitOfWork(fiber: Fiber): Fiber | null {
   if (!fiber.dom) {
     fiber.dom = createDom(fiber)
-  }
-  if (fiber.parent) {
-    fiber.parent.dom!.appendChild(fiber.dom)
   }
   const elements = fiber.props.children
   let index = 0
@@ -148,8 +177,9 @@ function performUnitOfWork(fiber: Fiber) {
     if (nextFiber.sibling) {
       return nextFiber.sibling
     }
-    nextFiber = nextFiber.parent
+    nextFiber = nextFiber.parent!
   }
+  return null
 }
 
 export default Didact
