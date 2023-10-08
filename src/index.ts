@@ -3,14 +3,17 @@ type ElementType = keyof HTMLElementTagNameMap | EnumElementType
 interface ElementProps {
   nodeValue?: string
   children: DidactElement[]
+  [key: string]: any
 }
 interface Fiber {
   type: ElementType
   props: ElementProps
   dom: HTMLElement | Text | null
+  alternate?: Fiber | null
   parent: Fiber
   child?: Fiber
   sibling?: Fiber
+  effectTag?: "UPDATE" | "PLACEMENT" | "DELETION"
 }
 type DidactElement = {
   type: ElementType
@@ -24,6 +27,12 @@ let nextUnitOfWork: Fiber | null = null
  * remain reference of root node.
  */
 let wipRoot: Fiber | null = null
+/**
+ * The fiber that we committed to the Dom in the previous commit phase.
+ */
+let currentRoot: Fiber | null = null
+
+let delections: Fiber[] = []
 
 const Didact = {
   createElement,
@@ -67,17 +76,14 @@ function createDom(fiber: Fiber): HTMLElement | Text {
     fiber.type === TextElementType
       ? document.createTextNode("")
       : document.createElement(fiber.type)
-  /**
-   * We also need to assign property to Dom node.
-   * @param key keyof ElementProps
-   * @returns boolean
-   */
-  const isProperty = (key: string) => key !== "children"
-  Object.keys(fiber.props)
-    .filter(isProperty)
-    .forEach(key => {
-      Reflect.set(dom, key, fiber.props[key as keyof ElementProps])
-    })
+
+  updateDom(
+    dom,
+    {
+      children: [],
+    },
+    fiber.props
+  )
   return dom
 }
 
@@ -92,12 +98,16 @@ function render(element: DidactElement, container: HTMLElement) {
     props: {
       children: [element],
     },
-  } as Fiber
+    alternate: currentRoot,
+  } as unknown as Fiber
+  delections = []
   nextUnitOfWork = wipRoot
 }
 
 function commitRoot() {
-  commitWork(wipRoot!)
+  delections.forEach(commitWork)
+  commitWork(wipRoot!.child!)
+  currentRoot = wipRoot
   wipRoot = null
 }
 
@@ -109,9 +119,53 @@ function commitRoot() {
 function commitWork(fiber: Fiber) {
   if (!fiber) return
   const parentDom = fiber.parent.dom
-  parentDom?.appendChild(fiber.dom!)
+  if (fiber.effectTag === "PLACEMENT" && fiber.dom !== null) {
+    parentDom?.appendChild(fiber.dom!)
+  } else if (fiber.effectTag === "UPDATE" && fiber.dom !== null) {
+    updateDom(fiber.dom, fiber.alternate!.props, fiber.props)
+  } else if (fiber.effectTag === "DELETION") {
+    parentDom?.removeChild(fiber.dom!)
+  }
   commitWork(fiber.child!)
   commitWork(fiber.sibling!)
+}
+
+const isEvent = (key: string) => key.startsWith("on")
+const isProperty = (key: string) => key !== "children" && !isEvent(key)
+const isNew = (prev: Fiber["props"], next: Fiber["props"]) => (key: string) =>
+  prev[key] !== next[key]
+const isGone = (prev: Fiber["props"], next: Fiber["props"]) => (key: string) => !(key in next)
+function updateDom(dom: Fiber["dom"], prevProps: Fiber["props"], nextProps: Fiber["props"]) {
+  /* remove or changed event listeners */
+  Object.keys(prevProps)
+    .filter(isEvent)
+    .filter(key => !(key in nextProps) || isNew(prevProps, nextProps)(key))
+    .forEach(name => {
+      const eventType = name.toLowerCase().substring(2)
+      dom?.removeEventListener(eventType, prevProps[name])
+    })
+  /* remove old properties */
+  Object.keys(prevProps)
+    .filter(isProperty)
+    .filter(isGone(prevProps, nextProps))
+    .forEach(name => {
+      ;(dom as any)[name] = ""
+    })
+  /* set new or changed properties */
+  Object.keys(nextProps)
+    .filter(isProperty)
+    .filter(isNew(prevProps, nextProps))
+    .forEach(name => {
+      ;(dom as any)[name] = nextProps[name]
+    })
+  /* add event listeners */
+  Object.keys(nextProps)
+    .filter(isEvent)
+    .filter(isNew(prevProps, nextProps))
+    .forEach(name => {
+      const eventType = name.toLowerCase().substring(2)
+      dom?.addEventListener(eventType, nextProps[name])
+    })
 }
 
 /**
@@ -142,29 +196,7 @@ function performUnitOfWork(fiber: Fiber): Fiber | null {
     fiber.dom = createDom(fiber)
   }
   const elements = fiber.props.children
-  let index = 0
-  let prevSibling = null
-
-  /**
-   * create the Fiber for each child.
-   */
-  while (index < elements.length) {
-    const element = elements[index]
-    const newFiber: Fiber = {
-      type: element.type,
-      props: element.props,
-      parent: fiber,
-      dom: null,
-    }
-    if (index === 0) {
-      fiber.child = newFiber
-    } else {
-      prevSibling!.sibling = newFiber
-    }
-    prevSibling = newFiber
-    index++
-  }
-
+  reconcileChildren(fiber, elements)
   /**
    * first dispose of the Child, then with the sibling, last with the sibling of the parent, and repeating.
    */
@@ -180,6 +212,60 @@ function performUnitOfWork(fiber: Fiber): Fiber | null {
     nextFiber = nextFiber.parent!
   }
   return null
+}
+
+function reconcileChildren(wipFiber: Fiber, elements: Fiber["props"]["children"]) {
+  let index = 0
+  let oldFiber = wipFiber.alternate && wipFiber.alternate.child
+  let prevSibling = null
+
+  /**
+   * create the Fiber for each child.
+   */
+  while (index < elements.length || oldFiber !== null) {
+    const element = elements[index]
+    let newFiber: Fiber | null = null
+    // TODO compare oldFiber to Element
+    const sameType = oldFiber && element && oldFiber.type === element.type
+    if (sameType) {
+      /* only update with new props */
+      newFiber = {
+        type: oldFiber!.type,
+        props: element.props,
+        dom: oldFiber!.dom,
+        parent: wipFiber,
+        alternate: oldFiber,
+        effectTag: "UPDATE",
+      }
+    }
+    if (element && !sameType) {
+      /* adding new element */
+      newFiber = {
+        type: element.type,
+        props: element.props,
+        dom: null,
+        parent: wipFiber,
+        alternate: null,
+        effectTag: "PLACEMENT",
+      }
+    }
+    if (oldFiber && !sameType) {
+      /* remove old fiber */
+      oldFiber.effectTag = "DELETION"
+      delections.push(oldFiber)
+    }
+
+    if (oldFiber) {
+      oldFiber = oldFiber.sibling
+    }
+    if (index === 0) {
+      wipFiber.child = newFiber!
+    } else {
+      prevSibling!.sibling = newFiber!
+    }
+    prevSibling = newFiber
+    index++
+  }
 }
 
 export default Didact
