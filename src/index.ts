@@ -1,5 +1,6 @@
 type EnumElementType = "NODE_ELEMENT"
-type ElementType = keyof HTMLElementTagNameMap | EnumElementType
+type TagNameMap = keyof HTMLElementTagNameMap
+type ElementType = TagNameMap | EnumElementType | Function
 interface ElementProps {
   nodeValue?: string
   children: DidactElement[]
@@ -75,7 +76,7 @@ function createDom(fiber: Fiber): HTMLElement | Text {
   const dom =
     fiber.type === TextElementType
       ? document.createTextNode("")
-      : document.createElement(fiber.type)
+      : document.createElement(fiber.type as TagNameMap)
 
   updateDom(
     dom,
@@ -118,16 +119,28 @@ function commitRoot() {
  */
 function commitWork(fiber: Fiber) {
   if (!fiber) return
-  const parentDom = fiber.parent.dom
+  let domParentFiber = fiber.parent
+  while (!domParentFiber.dom) {
+    domParentFiber = domParentFiber.parent
+  }
+  const parentDom = domParentFiber.dom
   if (fiber.effectTag === "PLACEMENT" && fiber.dom !== null) {
     parentDom?.appendChild(fiber.dom!)
   } else if (fiber.effectTag === "UPDATE" && fiber.dom !== null) {
     updateDom(fiber.dom, fiber.alternate!.props, fiber.props)
   } else if (fiber.effectTag === "DELETION") {
-    parentDom?.removeChild(fiber.dom!)
+    commitDelection(fiber, parentDom)
   }
   commitWork(fiber.child!)
   commitWork(fiber.sibling!)
+}
+
+function commitDelection(fiber: Fiber, parentDom: Fiber["dom"]) {
+  if (fiber.dom) {
+    parentDom?.removeChild(fiber.dom!)
+  } else {
+    commitDelection(fiber.child!, parentDom)
+  }
 }
 
 const isEvent = (key: string) => key.startsWith("on")
@@ -192,11 +205,12 @@ function workLoop(deadline: IdleDeadline) {
 requestIdleCallback(workLoop)
 
 function performUnitOfWork(fiber: Fiber): Fiber | null {
-  if (!fiber.dom) {
-    fiber.dom = createDom(fiber)
+  const isFunctionComponent = fiber.type instanceof Function
+  if (isFunctionComponent) {
+    updateFunctionComponent(fiber)
+  } else {
+    updateHostComponent(fiber)
   }
-  const elements = fiber.props.children
-  reconcileChildren(fiber, elements)
   /**
    * first dispose of the Child, then with the sibling, last with the sibling of the parent, and repeating.
    */
@@ -212,6 +226,18 @@ function performUnitOfWork(fiber: Fiber): Fiber | null {
     nextFiber = nextFiber.parent!
   }
   return null
+}
+
+function updateFunctionComponent(fiber: Fiber) {
+  const elements = [(fiber.type as Function)(fiber.props)]
+  reconcileChildren(fiber, elements)
+}
+function updateHostComponent(fiber: Fiber) {
+  if (!fiber.dom) {
+    fiber.dom = createDom(fiber)
+  }
+  const elements = fiber.props.children
+  reconcileChildren(fiber, elements)
 }
 
 function reconcileChildren(wipFiber: Fiber, elements: Fiber["props"]["children"]) {
