@@ -1,13 +1,16 @@
 import Didact from "./index"
 
 function App(props: Record<string, any>) {
+  const [state, setState] = Didact.useState(0)
   return (
     <div id="foo">
       <a>bar</a>
+      <br />
+      {state}
       <b />
       <input
         onInput={e => {
-          console.log(e.srcElement.value)
+          setState(e.srcElement.value)
         }}
       ></input>
     </div>

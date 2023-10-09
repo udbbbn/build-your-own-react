@@ -15,10 +15,15 @@ interface Fiber {
   child?: Fiber
   sibling?: Fiber
   effectTag?: "UPDATE" | "PLACEMENT" | "DELETION"
+  hooks?: Hook[]
 }
 type DidactElement = {
   type: ElementType
   props: ElementProps
+}
+type Hook = {
+  state: any
+  queue: any[]
 }
 const TextElementType = "NODE_ELEMENT"
 
@@ -38,6 +43,7 @@ let delections: Fiber[] = []
 const Didact = {
   createElement,
   render,
+  useState,
 }
 
 function createElement(
@@ -124,9 +130,9 @@ function commitWork(fiber: Fiber) {
     domParentFiber = domParentFiber.parent
   }
   const parentDom = domParentFiber.dom
-  if (fiber.effectTag === "PLACEMENT" && fiber.dom !== null) {
+  if (fiber.effectTag === "PLACEMENT" && fiber.dom != null) {
     parentDom?.appendChild(fiber.dom!)
-  } else if (fiber.effectTag === "UPDATE" && fiber.dom !== null) {
+  } else if (fiber.effectTag === "UPDATE" && fiber.dom != null) {
     updateDom(fiber.dom, fiber.alternate!.props, fiber.props)
   } else if (fiber.effectTag === "DELETION") {
     commitDelection(fiber, parentDom)
@@ -228,10 +234,47 @@ function performUnitOfWork(fiber: Fiber): Fiber | null {
   return null
 }
 
+/* work in progress fiber */
+let wipFiber: Fiber | null = null
+let hookIndex: number | null = null
+
 function updateFunctionComponent(fiber: Fiber) {
+  wipFiber = fiber
+  hookIndex = 0
+  wipFiber.hooks = []
   const elements = [(fiber.type as Function)(fiber.props)]
   reconcileChildren(fiber, elements)
 }
+
+function useState(initialValue: any) {
+  const oldHooks: Hook | null | undefined =
+    wipFiber?.alternate && wipFiber.alternate.hooks && wipFiber.alternate.hooks[hookIndex!]
+  const hook: Hook = {
+    state: oldHooks ? oldHooks.state : initialValue,
+    queue: [],
+  }
+
+  const actions = oldHooks ? oldHooks.queue : []
+  actions.forEach(act => {
+    hook.state = act(hook.state)
+  })
+
+  const setState = (action: Function) => {
+    hook.queue.push(action instanceof Function ? action : () => action)
+    wipRoot = {
+      dom: currentRoot!.dom,
+      props: currentRoot!.props,
+      alternate: currentRoot,
+    } as unknown as Fiber
+    nextUnitOfWork = wipRoot
+    delections = []
+  }
+
+  wipFiber?.hooks?.push(hook)
+  hookIndex!++
+  return [hook.state, setState]
+}
+
 function updateHostComponent(fiber: Fiber) {
   if (!fiber.dom) {
     fiber.dom = createDom(fiber)
@@ -248,7 +291,7 @@ function reconcileChildren(wipFiber: Fiber, elements: Fiber["props"]["children"]
   /**
    * create the Fiber for each child.
    */
-  while (index < elements.length || oldFiber !== null) {
+  while (index < elements.length || oldFiber != null) {
     const element = elements[index]
     let newFiber: Fiber | null = null
     // TODO compare oldFiber to Element
